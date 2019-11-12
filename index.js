@@ -384,7 +384,6 @@ class StickableTabView extends PureComponent {
   };
   render() {
     const {
-      _memo,
       _setCachedScrollOffset,
       _handleHeaderLayoutChange,
       _renderChildren,
@@ -397,13 +396,6 @@ class StickableTabView extends PureComponent {
       style,
       initialPage,
     } = this.props;
-
-    const [TabBar, rerenderTabBar] = _memo(
-      'TabBar@render',
-      () => withDirect(renderTabBar),
-      [renderTabBar]
-    );
-
     return (
       <View
         style={{
@@ -412,13 +404,6 @@ class StickableTabView extends PureComponent {
           flexGrow: 1,
         }}
       >
-        <HeaderContainer
-          scrollOffsetAnimatedValue={scrollOffsetAnimatedValue}
-          onLayoutChange={_handleHeaderLayoutChange}
-        >
-          {header}
-          <TabBar />
-        </HeaderContainer>
         <ScrollableTabView
           style={{
             position: 'absolute',
@@ -427,10 +412,15 @@ class StickableTabView extends PureComponent {
             right: 0,
             bottom: 0,
           }}
-          renderTabBar={props => {
-            rerenderTabBar(props);
-            return <View />;
-          }}
+          renderTabBar={props => (
+            <HeaderContainer
+              scrollOffsetAnimatedValue={scrollOffsetAnimatedValue}
+              onLayoutChange={_handleHeaderLayoutChange}
+            >
+              {header}
+              {renderTabBar(props)}
+            </HeaderContainer>
+          )}
           initialPage={initialPage}
           onChangeTab={({ i, ref }) => {
             const {
@@ -472,8 +462,7 @@ function withDirect(WrapedComponment, prerender = false) {
   let shouldRender = false;
   // TODO: if component's render after call rerender
   const rerenderRef = {
-    current: () => {
-    },
+    current: () => {},
   };
   class C extends PureComponent {
     state = {
@@ -508,7 +497,6 @@ function withDirect(WrapedComponment, prerender = false) {
       };
 
       const isRender = prerender || shouldRender;
-
       return isRender ? (
         <WrapedComponment {...alterProps} ref={forwardedRef} />
       ) : null;
