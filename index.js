@@ -175,46 +175,28 @@ class StickableTabView extends PureComponent {
     return node.props.as || node.type.name;
   };
   // 考虑性能
-  _partRenderableChildrenType = children => {
-    const { _memo, _setChildrenNodeRerender, _getComponentName } = this;
-    return (children || []).map((child, index) => {
-      const sceneKey = makeSceneKey(child, index);
-      const currentNodeType = child.type;
-      const [PartRenderType, rerender] = _memo(
-        `${sceneKey}@_genPartRenderableChildren`,
-        () => {
-          const AnimatedVirtualizedList = Animated[_getComponentName(child)];
-          return withDirect(AnimatedVirtualizedList);
-        },
-        [currentNodeType]
-      );
-
-      _setChildrenNodeRerender(sceneKey, () => {
-        const {
-          _getHeaderOffset,
-          _getFoldableHeaderOffset,
-          _getCachedScrollOffset,
-        } = this;
-        const y = calcAlterScrollOffset(
-          _getHeaderOffset(),
-          _getFoldableHeaderOffset(),
-          _getCachedScrollOffset(sceneKey)
-        );
-        rerender({
-          contentOffset: { y },
-        });
-      });
-      return PartRenderType;
-    });
+  _channelRenderableChildComponent = child => {
+    // TODO: only support FlatList
+    const { _getComponentName, _memo } = this;
+    const typeName = _getComponentName(child);
+    const AnimatedChannelRenderComponent = _memo(
+      `${typeName}@_channelRenderableChildComponent`,
+      () => {
+        const AnimatedComponent = Animated[typeName];
+        return withChannelRender(AnimatedComponent);
+      },
+      [typeName]
+    );
+    return AnimatedChannelRenderComponent;
   };
 
-  childrenNodeTypeMap = {};
-  _getChildrenNodeType = sceneKey => {
-    return this.childrenNodeTypeMap[sceneKey];
-  };
-  _setChildrenNodeType = (sceneKey, nodeType) => {
-    this.childrenNodeTypeMap[sceneKey] = nodeType;
-  };
+  // childrenNodeTypeMap = {};
+  // _getChildrenNodeType = sceneKey => {
+  //   return this.childrenNodeTypeMap[sceneKey];
+  // };
+  // _setChildrenNodeType = (sceneKey, nodeType) => {
+  //   this.childrenNodeTypeMap[sceneKey] = nodeType;
+  // };
   childrenNodeRerenderMap = {};
   _getChildrenNodeRerender = sceneKey => {
     return this.childrenNodeRerenderMap[sceneKey] || (() => {});
@@ -327,27 +309,43 @@ class StickableTabView extends PureComponent {
       _setScrollNode,
       _handleScrollStop,
       scrollOffsetAnimatedValue,
-      _partRenderableChildrenType,
-      _getComponentName,
+      _channelRenderableChildComponent,
+      _setChildrenNodeRerender,
     } = this;
     const { onScroll: proxyOnScroll } = this.props;
     const { headerHeight } = this.state;
-    const ChildrenTypes = _partRenderableChildrenType(children);
     return React.Children.map(children, (child, index) => {
+      const AnimatedChannelRenderChildComponent = _channelRenderableChildComponent(
+        child
+      );
       const sceneKey = makeSceneKey(child, index);
       const handleScroll = _handleScrollStop(sceneKey);
 
-      const DirectAnimatedVirtualizedList =
-        ChildrenTypes[index] || Animated[_getComponentName(child)];
-
       return (
-        <DirectAnimatedVirtualizedList
+        <AnimatedChannelRenderChildComponent
           {...child.props}
-          ref={node => {
+          forwardedRef={node => {
             // todo check ref api
             // child.props.ref(node)
             // set scrollNodes
             _setScrollNode(sceneKey, node ? node._component : null);
+          }}
+          ref={channelRenderInstance => {
+            _setChildrenNodeRerender(sceneKey, () => {
+              const {
+                _getHeaderOffset,
+                _getFoldableHeaderOffset,
+                _getCachedScrollOffset,
+              } = this;
+              const y = calcAlterScrollOffset(
+                _getHeaderOffset(),
+                _getFoldableHeaderOffset(),
+                _getCachedScrollOffset(sceneKey)
+              );
+              channelRenderInstance.rerender({
+                contentOffset: { y },
+              });
+            });
           }}
           ListHeaderComponent={
             <View
@@ -458,13 +456,9 @@ StickableTabView.defaultProps = {
 
 export default StickableTabView;
 
-function withDirect(WrapedComponment, prerender = false) {
-  let shouldRender = false;
+function withChannelRender(WrapedComponment) {
   // TODO: if component's render after call rerender
-  const rerenderRef = {
-    current: () => {},
-  };
-  class C extends PureComponent {
+  class ChannelRender extends PureComponent {
     state = {
       supplementProps: {},
     };
@@ -475,6 +469,12 @@ function withDirect(WrapedComponment, prerender = false) {
     _getLastSupplementProps = () => {
       return this.lastSupplementProps;
     };
+
+    rerender(supplementProps = {}) {
+      this.setState({
+        supplementProps,
+      });
+    }
     render() {
       let alterProps = {};
       const { props, _setLastSupplementProps, _getLastSupplementProps } = this;
@@ -489,25 +489,8 @@ function withDirect(WrapedComponment, prerender = false) {
         alterProps = { ...props, ...supplementProps };
       }
 
-      rerenderRef.current = (externalProps = {}) => {
-        shouldRender = true;
-        this.setState({
-          supplementProps: { ...externalProps },
-        });
-      };
-
-      const isRender = prerender || shouldRender;
-      return isRender ? (
-        <WrapedComponment {...alterProps} ref={forwardedRef} />
-      ) : null;
+      return <WrapedComponment {...alterProps} ref={forwardedRef} />;
     }
   }
-  return [
-    React.forwardRef((props, ref) => {
-      return <C {...props} forwardedRef={ref} />;
-    }),
-    (...args) => {
-      rerenderRef.current(...args);
-    },
-  ];
+  return ChannelRender;
 }
