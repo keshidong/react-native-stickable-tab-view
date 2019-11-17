@@ -193,8 +193,81 @@ class StickableTabView extends PureComponent {
     return this._getChildrenNodeRerender(sceneKey);
   };
 
+  // for keep flatListRender's props.onScroll
+  proxyScrollEventListenerMap = {};
+  _getProxyScrollEventListener = sceneKey => {
+    return this.proxyScrollEventListenerMap[sceneKey];
+  };
+  _setProxyScrollEventListener = (sceneKey, listener) => {
+    this.proxyScrollEventListenerMap[sceneKey] = listener;
+  };
+
   // for lazy render scene content
   componentDidMount() {}
+
+  _getScrollEventListener = sceneKey => {
+    const {
+      scrollOffsetAnimatedValue,
+      _getProxyScrollEventListener,
+      _getScrollStopHandler,
+    } = this;
+    const proxyOnScroll = _getProxyScrollEventListener(sceneKey);
+    const scrollStopHandler = _getScrollStopHandler(sceneKey);
+    return Animated.event(
+      [
+        {
+          nativeEvent: {
+            contentOffset: {
+              y: scrollOffsetAnimatedValue,
+            },
+          },
+        },
+      ],
+      {
+        useNativeDriver: true,
+        listener: e => {
+          // proxy onScroll
+          if (proxyOnScroll) {
+            proxyOnScroll(e);
+          }
+          scrollStopHandler(e);
+        },
+      }
+    );
+  };
+  currentScrollEventUnlistener = () => {};
+  _getCurrentScrollEventUnlistener = () => {
+    return this.currentScrollEventUnlistener;
+  };
+  _setCurrentScrollEventUnlistener = fn => {
+    this.currentScrollEventUnlistener = fn;
+  };
+
+  _setCurrentScrollListener = sceneKey => {
+    const {
+      _getCurrentScrollEventUnlistener,
+      _setCurrentScrollEventUnlistener,
+      _getScrollEventListener,
+    } = this;
+    const currentScrollEventUnlistener = _getCurrentScrollEventUnlistener();
+
+    // remove prev scroll event listener
+    if (currentScrollEventUnlistener) {
+      currentScrollEventUnlistener();
+    }
+    if (sceneKey !== null) {
+      const scrollableNode = this._getScrollNode(sceneKey);
+      if (scrollableNode) {
+        const nextScrollEventListener = _getScrollEventListener(sceneKey);
+
+        scrollableNode.addListener('scroll', nextScrollEventListener);
+        _setCurrentScrollEventUnlistener(() => {
+          scrollableNode.removeEventListener('scroll', nextScrollEventListener);
+        });
+      }
+    }
+  };
+
   _handleHeaderLayoutChange = ({ height, stickBarHeight }) => {
     this.setState({
       headerHeight: height,
@@ -240,7 +313,7 @@ class StickableTabView extends PureComponent {
       }
     });
   };
-  _handleScrollStop = sceneKey => {
+  _getScrollStopHandler = sceneKey => {
     let timerHandler = null;
     return e => {
       // The purpose of debounds is to aviod affect header's transform
@@ -269,16 +342,19 @@ class StickableTabView extends PureComponent {
   _renderChildren = () => {
     const {
       _setScrollNode,
-      _handleScrollStop,
-      scrollOffsetAnimatedValue,
       _setChildrenNodeRerender,
+      _scrollComponentDidMount,
     } = this;
-    const { onScroll: proxyOnScroll, tabs } = this.props;
+    const { tabs } = this.props;
     const { headerHeight, containerHeight, stickBarLayoutHeight } = this.state;
+    console.log(
+      'containerHeight, stickBarLayoutHeight',
+      containerHeight,
+      stickBarLayoutHeight
+    );
     return tabs.map((child, index) => {
       const tabLabel = tabs[index];
       const sceneKey = makeSceneKey(tabLabel, index);
-      const handleScroll = _handleScrollStop(sceneKey);
 
       return (
         <ChannelRenderAnimatedFlatList
@@ -290,6 +366,9 @@ class StickableTabView extends PureComponent {
           }}
           key={sceneKey}
           tabLabel={tabLabel}
+          _trulyComponentDidMount={() => {
+            _scrollComponentDidMount(sceneKey);
+          }}
           ref={channelRenderInstance => {
             _setChildrenNodeRerender(sceneKey, props => {
               const {
@@ -298,7 +377,17 @@ class StickableTabView extends PureComponent {
                 _getCachedScrollOffset,
               } = this;
               const { containerHeight, stickBarHeight } = this.state;
-              const { hasRendered: hasRenderedFn, addRenderedList } = this;
+              const {
+                hasRendered: hasRenderedFn,
+                addRenderedList,
+                _setProxyScrollEventListener,
+              } = this;
+
+              // set scroll listener
+              if (props.onScroll) {
+                _setProxyScrollEventListener(sceneKey, props.onScroll);
+              }
+
               const hasRendered = hasRenderedFn(sceneKey);
               if (!hasRendered) {
                 addRenderedList(sceneKey);
@@ -333,27 +422,7 @@ class StickableTabView extends PureComponent {
             />
           }
           scrollEventThrottle={16}
-          onScroll={Animated.event(
-            [
-              {
-                nativeEvent: {
-                  contentOffset: {
-                    y: scrollOffsetAnimatedValue,
-                  },
-                },
-              },
-            ],
-            {
-              useNativeDriver: true,
-              listener: e => {
-                // proxy onScroll
-                if (proxyOnScroll) {
-                  proxyOnScroll(e);
-                }
-                handleScroll(e);
-              },
-            }
-          )}
+          onScroll={Animated.event}
         />
       );
     });
@@ -366,6 +435,24 @@ class StickableTabView extends PureComponent {
       containerHeight: e.nativeEvent.layout.height,
     });
   };
+
+  _scrollComponentDidMount = sceneKey => {
+    // addListener for active tab's FlatList
+    const { _getActiveSceneKey, _setCurrentScrollListener } = this;
+    const activeSceneKey = _getActiveSceneKey();
+
+    if (activeSceneKey === sceneKey) {
+      _setCurrentScrollListener(sceneKey);
+    }
+  };
+  _reregisterScrollEventListenerTabChange = sceneKey => {
+    const { _setCurrentScrollListener } = this;
+    _setCurrentScrollListener(sceneKey);
+  };
+
+  componentWillUnmount() {
+    this._setCurrentScrollListener(null);
+  }
   render() {
     const {
       _setCachedScrollOffset,
@@ -407,6 +494,7 @@ class StickableTabView extends PureComponent {
               _getAlterScrollOffset,
               _getActiveSceneKey,
               _setActiveSceneKey,
+              _reregisterScrollEventListenerTabChange,
             } = this;
             const lastSceneKey = _getActiveSceneKey();
             _setCachedScrollOffset(
@@ -417,6 +505,9 @@ class StickableTabView extends PureComponent {
 
             const activeSceneKey = makeSceneKey(ref.props.tabLabel, i);
             _setActiveSceneKey(activeSceneKey);
+
+            // register scroll event handler for active tab
+            _reregisterScrollEventListenerTabChange(activeSceneKey);
 
             // proxy onChangeTab
             this.props.onChangeTab(i);
@@ -462,6 +553,15 @@ function withChannelRender(WrapedComponment) {
         supplementProps,
         allowRenderTrulyComponent: true,
       });
+    }
+    componentDidUpdate(prevProps, prevState) {
+      if (
+        !prevState.allowRenderTrulyComponent &&
+        this.state.allowRenderTrulyComponent &&
+        this.props._trulyComponentDidMount
+      ) {
+        this.props._trulyComponentDidMount();
+      }
     }
     render() {
       let alterProps = {};
